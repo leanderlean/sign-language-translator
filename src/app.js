@@ -1271,16 +1271,44 @@ function setupEventListeners() {
   });
 
   btnExportDataset.addEventListener('click', () => {
-    const json = classifier.exportDatasetJSON();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `asl-lens-dataset-${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const exportFromBackend = async () => {
+      const response = await axios.get(`${BACKEND_BASE_URL}/api/training/export`, {
+        headers: { 'Accept': 'application/json' }
+      });
+
+      const payload = Array.isArray(response.data?.samples)
+        ? response.data.samples
+        : response.data;
+
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `asl-lens-backend-export-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    const exportLocal = () => {
+      const json = classifier.exportDatasetJSON();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `asl-lens-dataset-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    exportFromBackend().catch((error) => {
+      console.warn('Backend export failed, falling back to local export:', error);
+      exportLocal();
+    });
   });
 
   btnImportDatasetTrigger.addEventListener('click', () => {
