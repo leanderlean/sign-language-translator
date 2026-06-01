@@ -1,6 +1,10 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import morgan from 'morgan'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { fetch as undiciFetch } from 'undici'
 
 // ensure `fetch` is available (some Node deployments use older runtimes)
@@ -10,7 +14,21 @@ if (!globalThis.fetch) {
 
 const app = express()
 app.use(express.json({ limit: '10mb' }))
-app.use(cors())
+// Security headers
+app.use(helmet())
+
+// Logging
+app.use(morgan(process.env.LOG_FORMAT || 'combined'))
+
+// CORS origin control (comma-separated list in ALLOWED_ORIGINS)
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : null;
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!ALLOWED_ORIGINS || !origin) return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        return callback(new Error('CORS origin not allowed'));
+    }
+}))
 const PORT = process.env.PORT || process.env.BACKEND_PORT || 3000
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || ''
@@ -220,7 +238,39 @@ app.get("/", (req, res) => {
     res.send("Hello from the backend")
 })
 
-app.listen(PORT, () => {
-    console.log(`Serve is running on port: http://localhost:${PORT}`)
+// Serve frontend when built (Vite outputs to ../dist)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+if (process.env.NODE_ENV === 'production') {
+    const distPath = path.join(__dirname, '..', 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+}
+
+// Error handler
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err && err.stack ? err.stack : err);
+    if (res.headersSent) return next(err);
+    res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+});
+
+const server = app.listen(PORT, () => {
+    console.log(`Server is running on port: http://localhost:${PORT}`)
 })
+
+// Graceful shutdown
+function shutdown() {
+    console.log('Shutting down server...');
+    server.close(() => {
+        console.log('HTTP server closed.');
+        process.exit(0);
+    });
+    setTimeout(() => {
+        console.error('Forcing shutdown.');
+        process.exit(1);
+    }, 10000).unref();
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 

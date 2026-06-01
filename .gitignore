@@ -16,6 +16,7 @@ dist/
 tmp/
 out/
 build/
+Backend/.env
 
 # IDEs and editors
 .idea/

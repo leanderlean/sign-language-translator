@@ -961,7 +961,6 @@ function handleNoHand() {
 function appendWordToSentence(word) {
   const filipinoMap = {
     'HELLO': 'KUMUSTA',
-    'YES': 'OO',
     'NO': 'HINDI',
     'I LOVE YOU': 'MAHAL KITA',
     'THANK YOU': 'SALAMAT',
