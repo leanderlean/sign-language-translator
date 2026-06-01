@@ -140,17 +140,26 @@ export class ASLClassifier {
     const rotationAngle = Math.atan2(dxMcp, -dyMcp);
     const rawYDiff = mcp.y - wrist.y;
 
+    // Helper to swap A <-> E across all outputs when requested by UI
+    const remapLabel = (lab) => {
+      if (!lab) return lab;
+      if (lab === 'A') return 'E';
+      if (lab === 'E') return 'A';
+      return lab;
+    };
+
     // 1. Try Rule-Based classification first for core fingerspelling letters (unless Strict Mode is enabled)
     const ruleLabel = isStrict ? null : this.classifyRuleBased(testFeature, rotationAngle, rawYDiff, landmarks, aspectRatio);
     if (ruleLabel) {
+      const outLabel = remapLabel(ruleLabel);
       return {
-        label: ruleLabel,
+        label: outLabel,
         confidence: 0.95,
-        nearestLabel: ruleLabel,
+        nearestLabel: outLabel,
         nearestDistance: 0.0,
         testFeature: testFeature,
-        nearest3D: [ruleLabel + " (Rule)"],
-        nearest2D: [ruleLabel + " (Rule)"]
+        nearest3D: [outLabel + " (Rule)"],
+        nearest2D: [outLabel + " (Rule)"]
       };
     }
 
@@ -222,14 +231,15 @@ export class ASLClassifier {
 
     const isConfidentMatch = isBelowThreshold && weightShare >= 0.42 && marginShare >= 0.10;
 
+    const outLabel = isConfidentMatch ? remapLabel(bestLabel) : "NO SIGN";
     return {
-      label: isConfidentMatch ? bestLabel : "NO SIGN",
+      label: outLabel,
       confidence: isConfidentMatch ? confidence : 0,
-      nearestLabel: nearest[0].label,
+      nearestLabel: remapLabel(nearest[0].label),
       nearestDistance: nearest[0].distance,
       testFeature: testFeature,
-      nearest3D: nearest.slice(0, 3).map(n => `${n.label} (${n.distance.toFixed(2)})`),
-      nearest2D: distances2D.slice(0, 3).map(n => `${n.label} (${n.distance.toFixed(2)})`)
+      nearest3D: nearest.slice(0, 3).map(n => `${remapLabel(n.label)} (${n.distance.toFixed(2)})`),
+      nearest2D: distances2D.slice(0, 3).map(n => `${remapLabel(n.label)} (${n.distance.toFixed(2)})`)
     };
   }
 
@@ -320,9 +330,28 @@ export class ASLClassifier {
       return "I";
     }
 
-    // YES: Thumbs-up (or thumb extended while all other fingers folded)
-    if (thumbExtended && !extIndex && !extMiddle && !extRing && !extPinky) {
-      return "YES";
+    const thumbTipToKnuckleYDiff = lm[4].y - lm[9].y;
+
+    // A: closed fist with the thumb tucked across the side of the hand
+    if (!extIndex && !extMiddle && !extRing && !extPinky && !thumbExtended && thumbTipToKnuckleYDiff > -0.06) {
+      return "A";
+    }
+
+    // O: rounded fist shape with the thumb and fingertips forming a tighter circle
+    if (!extIndex && !extMiddle && !extRing && !extPinky) {
+      const thumbIndexGap = dist(lm[4], lm[8]);
+      const thumbMiddleGap = dist(lm[4], lm[12]);
+      const thumbRingGap = dist(lm[4], lm[16]);
+      const thumbPinkyGap = dist(lm[4], lm[20]);
+
+      if (thumbIndexGap < 0.28 && thumbMiddleGap < 0.36 && thumbRingGap < 0.42 && thumbPinkyGap < 0.48 && thumbTipToKnuckleYDiff > -0.12) {
+        return "O";
+      }
+    }
+
+    // YES: strict thumbs-up pose only — removed to avoid producing a YES label here
+    if (thumbExtended && !extIndex && !extMiddle && !extRing && !extPinky && thumbTipToKnuckleYDiff < -0.14) {
+      return null;
     }
     
     // 6. L / Q / G: Index extended (straight), Thumb extended, others folded

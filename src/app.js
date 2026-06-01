@@ -174,6 +174,8 @@ const getAlphabetArray = () => {
   return [];
 };
 const alphabet = getAlphabetArray();
+// Filter out any default samples labeled 'YES' to prevent KNN from returning that label
+const filteredAlphabet = Array.isArray(alphabet) ? alphabet.filter(s => String(s.label).toUpperCase() !== 'YES') : [];
 
 // Load pre-bundled alphabet if no custom gestures exist yet and user hasn't explicitly cleared them
 const CURRENT_DB_VERSION = "v3_user_trained";
@@ -181,7 +183,7 @@ const storedDbVersion = localStorage.getItem("asl_db_version");
 const isExplicitlyBlank = localStorage.getItem("asl_db_blank") === "true";
 
 if (!isExplicitlyBlank && (classifier.samples.length === 0 || storedDbVersion !== CURRENT_DB_VERSION)) {
-  classifier.samples = [...alphabet];
+  classifier.samples = [...filteredAlphabet];
   classifier.saveToLocalStorage();
   localStorage.setItem("asl_db_version", CURRENT_DB_VERSION);
   localStorage.setItem("asl_db_blank", "false");
@@ -796,6 +798,22 @@ function processTranslation(handList, handednessList = ["Right"]) {
   const localPrediction = classifier.classify(handList, handednessList, 5, aspectRatio, isStrict);
   const roboflowPrediction = (interpretMode === 'words') ? getFreshRoboflowPrediction() : null;
   let prediction = roboflowPrediction || localPrediction;
+
+  if (
+    roboflowPrediction &&
+    roboflowPrediction.label === 'YES' &&
+    localPrediction &&
+    (localPrediction.label === 'A' || localPrediction.label === 'O') &&
+    localPrediction.confidence >= 0.55
+  ) {
+    prediction = localPrediction;
+  }
+
+  // Globally remove any lingering 'YES' labels by treating them as NO SIGN
+  if (prediction && prediction.label === 'YES') {
+    prediction = { label: 'NO SIGN', confidence: 0 };
+  }
+
   console.debug('processTranslation: local=', localPrediction, 'roboflow=', roboflowPrediction, 'chosen=', prediction);
   
   // Check if we are currently locked in a motion prediction
