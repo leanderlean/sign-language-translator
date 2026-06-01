@@ -1,11 +1,17 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import { fetch as undiciFetch } from 'undici'
+
+// ensure `fetch` is available (some Node deployments use older runtimes)
+if (!globalThis.fetch) {
+    globalThis.fetch = undiciFetch
+}
 
 const app = express()
-app.use(express.json())
+app.use(express.json({ limit: '10mb' }))
 app.use(cors())
-const PORT = 3000
+const PORT = process.env.PORT || process.env.BACKEND_PORT || 3000
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || ''
 const SUPABASE_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || ''
@@ -13,7 +19,8 @@ const SUPABASE_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SU
 function requireSupabaseConfig(res) {
     if (!SUPABASE_URL || !SUPABASE_KEY) {
         res.status(500).json({
-            error: 'Supabase environment variables are missing. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Backend/.env.'
+            error:
+                'Supabase environment variables are missing. Set SUPABASE_URL and SUPABASE_KEY (or VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY) in your environment.'
         })
         return false
     }
@@ -33,7 +40,14 @@ async function supabaseRequest(path, options = {}) {
     })
 
     const text = await response.text()
-    const data = text ? JSON.parse(text) : null
+    let data = null
+    if (text) {
+        try {
+            data = JSON.parse(text)
+        } catch (err) {
+            data = text
+        }
+    }
 
     if (!response.ok) {
         const message = data?.message || data?.error || text || `Supabase request failed with ${response.status}`
@@ -47,7 +61,8 @@ async function supabaseRequest(path, options = {}) {
 }
 
 async function ensureGesture(label, numHands = 1) {
-    const lookup = await supabaseRequest(`/gestures?name=eq.${encodeURIComponent(label)}&select=id,name,num_hands&limit=1`, {
+    const normalized = String(label || '').trim().toUpperCase()
+    const lookup = await supabaseRequest(`/gestures?name=eq.${encodeURIComponent(normalized)}&select=id,name,num_hands&limit=1`, {
         method: 'GET'
     })
 
@@ -58,7 +73,7 @@ async function ensureGesture(label, numHands = 1) {
     const created = await supabaseRequest('/gestures', {
         method: 'POST',
         body: JSON.stringify({
-            name: label,
+            name: normalized,
             owner_tag: 'backend',
             is_public: true,
             num_hands: numHands
