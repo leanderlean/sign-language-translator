@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { ASLClassifier } from './classifier.js';
 import defaultAlphabet from '../asl_alphabet.json';
+import wordGestures from './word_gestures.json';
 
 // Elements
 const videoElement = document.getElementById('webcam');
@@ -795,7 +796,15 @@ function processTranslation(handList, handednessList = ["Right"]) {
     void requestRoboflowPrediction(handList);
   }
 
-  const localPrediction = classifier.classify(handList, handednessList, 5, aspectRatio, isStrict);
+  // Build allowed label set depending on interpret mode
+  let allowedLabels = null;
+  if (interpretMode === 'words') {
+    allowedLabels = new Set((wordGestures || []).map(s => String(s).toUpperCase()));
+  } else if (interpretMode === 'letters') {
+    allowedLabels = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+  }
+
+  const localPrediction = classifier.classify(handList, handednessList, 5, aspectRatio, isStrict, allowedLabels);
   const roboflowPrediction = (interpretMode === 'words') ? getFreshRoboflowPrediction() : null;
   let prediction = roboflowPrediction || localPrediction;
 

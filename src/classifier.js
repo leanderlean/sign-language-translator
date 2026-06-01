@@ -114,7 +114,7 @@ export class ASLClassifier {
    * @param {Array} handList - Array of hands landmarks, e.g. [hand1]
    * @param {Array} handednessList - Array of hand labels, e.g. ["Right"]
    */
-  classify(handList, handednessList = ["Right"], k = 5, aspectRatio = 1.3333, isStrict = false) {
+  classify(handList, handednessList = ["Right"], k = 5, aspectRatio = 1.3333, isStrict = false, allowedLabels = null) {
     if (!handList || handList.length === 0) {
       return { label: "NO SIGN", confidence: 0 };
     }
@@ -123,7 +123,11 @@ export class ASLClassifier {
     const handedness = handednessList[0] || "Right";
 
     // Query KNN Classifier
-    const activeSamples = this.samples;
+    let activeSamples = this.samples;
+    if (allowedLabels && allowedLabels instanceof Set) {
+      activeSamples = activeSamples.filter(s => allowedLabels.has(String(s.label || '').toUpperCase()));
+    }
+
     if (activeSamples.length === 0) {
       return { label: "NO SIGN", confidence: 0 };
     }
