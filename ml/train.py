@@ -2,10 +2,9 @@ import numpy as np
 import pandas as pd
 import json
 import joblib
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
 import os
 
@@ -16,8 +15,6 @@ JSON1_PATH = os.path.join(BASE_DIR, '..', 'asl_alphabet.json')
 JSON2_PATH = os.path.join(BASE_DIR, '..', 'asl_alphabet_original.json')
 MSASL_PATH = os.path.join(DATA_DIR, 'msasl_greetings.json')
 MODEL_PATH = os.path.join(BASE_DIR, 'model.pkl')
-ENCODER_PATH = os.path.join(BASE_DIR, 'encoder.pkl')
-SCALER_PATH = os.path.join(BASE_DIR, 'scaler.pkl')
 
 RANDOM_STATE = 42
 
@@ -51,6 +48,11 @@ def compute_angles(pts):
             angles.append(np.arccos(cos_a))
     return np.array(angles)
 
+def compute_finger_curls(pts):
+    """Measure how curled each finger is: distance from fingertip to MCP joint."""
+    fingers = [(4, 0), (8, 0), (12, 0), (16, 0), (20, 0)]
+    return np.array([np.linalg.norm(pts[tip] - pts[base]) for tip, base in fingers])
+
 def extract_features(row_vals):
     pts = np.array(row_vals).reshape(21, 3)
     raw = np.array(row_vals)
@@ -58,13 +60,39 @@ def extract_features(row_vals):
     angles = compute_angles(pts)
     wrist = pts[0]
     rel = (pts - wrist).flatten()
-    return np.concatenate([raw, rel, dists, angles])
+    curls = compute_finger_curls(pts)
+    return np.concatenate([raw, rel, dists, angles, curls])
 
-def augment(pts, label):
+def rotate_landmarks(pts, angle_deg):
+    """Rotate landmarks around Z axis (camera plane)."""
+    angle = np.radians(angle_deg)
+    c, s = np.cos(angle), np.sin(angle)
+    rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+    wrist = pts[0]
+    centered = pts - wrist
+    rotated = centered @ rot.T
+    return rotated + wrist
+
+def scale_landmarks(pts, scale_factor):
+    """Scale landmarks relative to wrist."""
+    wrist = pts[0]
+    centered = pts - wrist
+    scaled = centered * scale_factor
+    return scaled + wrist
+
+def augment(pts, label, n_aug=5):
     samples = [pts]
-    noise = np.random.normal(0, 0.005, pts.shape)
-    samples.append(pts + noise)
-    return samples, [label] * len(samples)
+    labels = [label]
+    rng = np.random.RandomState(abs(hash(str(pts[:3].tolist()) + str(label))) % 2**31)
+    for _ in range(n_aug):
+        aug = pts.copy()
+        aug = rotate_landmarks(aug, rng.uniform(-15, 15))
+        aug = scale_landmarks(aug, rng.uniform(0.85, 1.15))
+        noise = rng.normal(0, rng.uniform(0.002, 0.008), aug.shape)
+        aug = aug + noise
+        samples.append(aug)
+        labels.append(label)
+    return samples, labels
 
 def load_csv(path):
     df = pd.read_csv(path)
@@ -80,18 +108,17 @@ def load_json(path):
     labels = np.array([r['label'] for r in records])
     return data, labels
 
-def build_feature_matrix(raw_data, labels):
+def build_feature_matrix(raw_data, labels, n_aug=5):
     X_list, y_list = [], []
     for i in range(len(raw_data)):
         pts = raw_data[i].reshape(21, 3)
-        aug_pts, aug_labels = augment(pts, labels[i])
+        aug_pts, aug_labels = augment(pts, labels[i], n_aug=n_aug)
         for ap, al in zip(aug_pts, aug_labels):
             feats = extract_features(ap.flatten())
             X_list.append(feats)
             y_list.append(al)
     return np.array(X_list), np.array(y_list)
 
-# ─── Load all data sources ─────────────────────────────────────
 print("=" * 60)
 print("Loading datasets...")
 print("=" * 60)
@@ -110,67 +137,7 @@ if os.path.exists(MSASL_PATH):
     msasl_data, msasl_labels = load_json(MSASL_PATH)
     print(f"MSASL (greetings): {len(msasl_data)} samples, {len(set(msasl_labels))} classes")
 else:
-    print(f"MSASL (greetings): not found (run preprocess_msasl.py first)")
-
-# ─── Phase 1: Train on CSV, validate on JSON ──────────────────
-print("\n" + "=" * 60)
-print("Phase 1: Real-World Validation (Train on CSV, Validate on JSON)")
-print("=" * 60)
-
-X_csv, y_csv = build_feature_matrix(csv_data, csv_labels)
-X_json1, y_json1 = build_feature_matrix(json1_data, json1_labels)
-X_json2, y_json2 = build_feature_matrix(json2_data, json2_labels)
-
-# Combine both JSON sources
-X_json = np.concatenate([X_json1, X_json2])
-y_json = np.concatenate([y_json1, y_json2])
-
-# Find overlapping classes between CSV and JSON
-csv_classes = set(csv_labels)
-json_classes = set(np.concatenate([json1_labels, json2_labels]))
-overlap = sorted(csv_classes & json_classes)
-extra_json = sorted(json_classes - csv_classes)
-extra_csv = sorted(csv_classes - json_classes)
-print(f"Overlap classes: {overlap} ({len(overlap)})")
-print(f"JSON-only classes (not in CSV): {extra_json or 'none'}")
-print(f"CSV-only classes (not in JSON): {extra_csv or 'none'}")
-
-# Train on all CSV data
-encoder_phase1 = LabelEncoder()
-y_csv_enc = encoder_phase1.fit_transform(y_csv)
-
-scaler_phase1 = StandardScaler()
-X_csv_s = scaler_phase1.fit_transform(X_csv)
-
-rf_phase1 = RandomForestClassifier(n_estimators=200, max_depth=15, n_jobs=-1, random_state=RANDOM_STATE)
-rf_phase1.fit(X_csv_s, y_csv_enc)
-
-# Validate on JSON overlap classes only
-mask_overlap = np.isin(y_json, overlap)
-X_json_overlap = X_json[mask_overlap]
-y_json_overlap = y_json[mask_overlap]
-
-# Encode JSON labels using the CSV-trained encoder (only overlap classes present)
-# Filter to only labels the encoder knows about
-known_mask = np.isin(y_json_overlap, encoder_phase1.classes_)
-X_json_overlap = X_json_overlap[known_mask]
-y_json_overlap = y_json_overlap[known_mask]
-
-y_json_enc = encoder_phase1.transform(y_json_overlap)
-X_json_s = scaler_phase1.transform(X_json_overlap)
-
-y_json_pred = rf_phase1.predict(X_json_s)
-json_acc = np.mean(y_json_pred == y_json_enc)
-print(f"\nReal-world accuracy on JSON data: {json_acc:.3f} ({len(X_json_overlap)} samples)")
-print()
-present_labels = np.unique(y_json_enc)
-present_names = encoder_phase1.classes_[present_labels]
-print(classification_report(y_json_enc, y_json_pred, labels=present_labels, target_names=present_names))
-
-# ─── Phase 2: Combined training ────────────────────────────────
-print("\n" + "=" * 60)
-print("Phase 2: Combined Training (CSV + JSON1 + JSON2)")
-print("=" * 60)
+    print("MSASL (greetings): not found")
 
 # Combine all raw data
 sources_data = [csv_data, json1_data, json2_data]
@@ -182,10 +149,37 @@ if msasl_data is not None:
 all_data = np.concatenate(sources_data)
 all_labels = np.concatenate(sources_labels)
 
-print(f"Combined dataset: {len(all_data)} samples, {len(set(all_labels))} classes")
+print(f"\nCombined raw dataset: {len(all_data)} samples, {len(set(all_labels))} classes")
 print(f"Classes: {sorted(set(all_labels))}")
 
-X_all, y_all = build_feature_matrix(all_data, all_labels)
+# Use more augmentation for classes with fewer samples
+label_counts = pd.Series(all_labels).value_counts()
+median_count = label_counts.median()
+n_aug_map = {label: max(10, int(median_count / count * 3)) for label, count in label_counts.items() if count < median_count}
+print(f"\nClasses needing extra augmentation: {len(n_aug_map)}")
+for label, aug in sorted(n_aug_map.items()):
+    print(f"  {label}: {label_counts[label]} samples -> {aug}x augmentation")
+
+# Build feature matrix with adaptive augmentation
+X_list, y_list = [], []
+counts_used = {}
+for i in range(len(all_data)):
+    label = all_labels[i]
+    pts = all_data[i].reshape(21, 3)
+    n_aug = n_aug_map.get(label, 5)
+    aug_pts, aug_labels = augment(pts, label, n_aug=n_aug)
+    for ap, al in zip(aug_pts, aug_labels):
+        feats = extract_features(ap.flatten())
+        X_list.append(feats)
+        y_list.append(al)
+    counts_used[label] = counts_used.get(label, 0) + 1
+
+X_all = np.array(X_list)
+y_all = np.array(y_list)
+
+print(f"\nAfter augmentation: {len(X_all)} samples")
+print(f"Min samples per class: {min(pd.Series(y_all).value_counts())}")
+print(f"Max samples per class: {max(pd.Series(y_all).value_counts())}")
 
 encoder = LabelEncoder()
 y_encoded = encoder.fit_transform(y_all)
@@ -198,27 +192,49 @@ scaler = StandardScaler()
 X_train_s = scaler.fit_transform(X_train)
 X_test_s = scaler.transform(X_test)
 
-rf = RandomForestClassifier(n_estimators=200, max_depth=15, n_jobs=-1, random_state=RANDOM_STATE)
-rf.fit(X_train_s, y_train)
+# Hyperparameter tuning with limited grid
+print("\n" + "=" * 60)
+print("Hyperparameter tuning...")
+print("=" * 60)
+
+param_grid = {
+    'n_estimators': [200, 300],
+    'max_depth': [15, 20, None],
+    'min_samples_split': [2, 5],
+    'min_samples_leaf': [1, 2],
+}
+
+base_rf = RandomForestClassifier(class_weight='balanced', n_jobs=-1, random_state=RANDOM_STATE)
+
+# Use a smaller grid search on a stratified subset for speed
+grid = GridSearchCV(
+    base_rf, param_grid,
+    cv=3, scoring='balanced_accuracy', n_jobs=-1, verbose=1
+)
+grid.fit(X_train_s, y_train)
+
+rf = grid.best_estimator_
+print(f"Best params: {grid.best_params_}")
+print(f"Best CV score: {grid.best_score_:.4f}")
 
 y_pred = rf.predict(X_test_s)
 acc = np.mean(y_pred == y_test)
-
-print(f'\nCombined test accuracy: {acc:.3f}')
+print(f'\nTest accuracy: {acc:.4f}')
 print()
 print(classification_report(y_test, y_pred, target_names=encoder.classes_))
 
-# Per-class accuracy for key letters
-print("\nPer-class accuracy (key letters):")
+# Per-class accuracy
+print("\nPer-class accuracy:")
 report = classification_report(y_test, y_pred, target_names=encoder.classes_, output_dict=True)
-for cls in ['A', 'E'] + (['HELLO', 'I LOVE YOU', 'NO', 'YES'] if 'HELLO' in encoder.classes_ else []):
-    if cls in report:
+for cls in sorted(report.keys()):
+    if cls not in ['accuracy', 'macro avg', 'weighted avg']:
         prec = report[cls]['precision']
         recl = report[cls]['recall']
         f1 = report[cls]['f1-score']
-        print(f"  {cls:15s}: precision={prec:.3f}, recall={recl:.3f}, f1={f1:.3f}")
+        support = report[cls]['support']
+        print(f"  {cls:15s}: prec={prec:.3f} recall={recl:.3f} f1={f1:.3f} support={int(support)}")
 
-# ─── Save model ────────────────────────────────────────────────
+# Save model
 joblib.dump({
     'model_rf': rf, 'encoder': encoder, 'scaler': scaler,
     'classes': encoder.classes_, 'n_classes': len(encoder.classes_)

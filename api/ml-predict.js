@@ -42,6 +42,11 @@ function computeAngles(pts) {
   })
 }
 
+function computeFingerCurls(pts) {
+  // Distance from each fingertip to wrist (index 0)
+  return [[4, 0], [8, 0], [12, 0], [16, 0], [20, 0]].map(([tip, base]) => dist(pts[tip], pts[base]))
+}
+
 function extractFeatures(rowVals) {
   const pts = []
   for (let i = 0; i < 21; i++) {
@@ -52,7 +57,8 @@ function extractFeatures(rowVals) {
   const rel = pts.flatMap(p => [p[0] - wrist[0], p[1] - wrist[1], p[2] - wrist[2]])
   const dists = computeDistances(pts)
   const angles = computeAngles(pts)
-  return [...raw, ...rel, ...dists, ...angles]
+  const curls = computeFingerCurls(pts)
+  return [...raw, ...rel, ...dists, ...angles, ...curls]
 }
 
 function predict(landmarks) {

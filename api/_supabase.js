@@ -48,4 +48,14 @@ async function listAllSamples() {
   return supabaseRequest('/samples?select=id,gesture_id,num_hands,handedness,landmarks,features,image_path,source,quality,created_at,gestures(name)&order=created_at.asc', { method: 'GET' })
 }
 
-export { requireSupabaseConfig, supabaseRequest, ensureGesture, listAllSamples }
+async function deleteSamplesByGestureName(label) {
+  const normalized = String(label || '').trim().toUpperCase()
+  const lookup = await supabaseRequest(`/gestures?name=eq.${encodeURIComponent(normalized)}&select=id&limit=1`, { method: 'GET' })
+  if (!Array.isArray(lookup) || lookup.length === 0) return 0
+  const gestureId = lookup[0].id
+  const result = await supabaseRequest(`/samples?gesture_id=eq.${gestureId}`, { method: 'DELETE' })
+  await supabaseRequest(`/gestures?id=eq.${gestureId}`, { method: 'DELETE' })
+  return Array.isArray(result) ? result.length : 1
+}
+
+export { requireSupabaseConfig, supabaseRequest, ensureGesture, listAllSamples, deleteSamplesByGestureName }

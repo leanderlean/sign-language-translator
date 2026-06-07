@@ -16,10 +16,12 @@ classes = pkg['classes'].tolist() if hasattr(pkg['classes'], 'tolist') else list
 def export_tree(tree):
     """Export a single DecisionTree to a compact dict."""
     t = tree.tree_
-    # value.shape = (nodes, n_classes, n_outputs=1) → flatten last dim
-    values = t.value.reshape(t.value.shape[0], -1).tolist()
+    all_values = t.value.reshape(t.value.shape[0], -1)
+    cl = t.children_left.tolist()
+    # Only store value at leaf nodes (children_left == -1), null for internal
+    values = [None if cl[i] != -1 else all_values[i].tolist() for i in range(len(cl))]
     return {
-        'children_left': t.children_left.tolist(),
+        'children_left': cl,
         'children_right': t.children_right.tolist(),
         'feature': t.feature.tolist(),
         'threshold': t.threshold.tolist(),

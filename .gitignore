@@ -27,6 +27,10 @@ Backend/.env
 *.sln
 *.sw?
 
+# Python cache
+__pycache__/
+*.pyc
+
 # ML model pickle (large binary, use generated model.json instead)
 ml/*.pkl
 ml/data/*.zip

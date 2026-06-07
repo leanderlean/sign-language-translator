@@ -43,6 +43,10 @@ def compute_angles(pts):
             angles.append(np.arccos(cos_a))
     return np.array(angles)
 
+def compute_finger_curls(pts):
+    fingers = [(4, 0), (8, 0), (12, 0), (16, 0), (20, 0)]
+    return np.array([np.linalg.norm(pts[tip] - pts[base]) for tip, base in fingers])
+
 def extract_features(row_vals):
     pts = np.array(row_vals).reshape(21, 3)
     raw = row_vals
@@ -50,7 +54,8 @@ def extract_features(row_vals):
     angles = compute_angles(pts)
     wrist = pts[0]
     rel = (pts - wrist).flatten()
-    return np.concatenate([raw, rel, dists, angles])
+    curls = compute_finger_curls(pts)
+    return np.concatenate([raw, rel, dists, angles, curls])
 
 def predict(landmarks):
     feats = extract_features(landmarks)

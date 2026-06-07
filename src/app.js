@@ -95,6 +95,7 @@ const STABILITY_LOCK_THRESHOLD = 10;
 // Backend ML model integration
 let backendPrediction = null;
 let lastBackendCall = 0;
+let heldSign = { label: null, until: 0 };
 const BACKEND_THROTTLE_MS = 200;
 
 // Recording
@@ -112,6 +113,7 @@ const ROBOFLOW_REQUEST_INTERVAL_MS = 850;
 const ROBOFLOW_RESULT_TTL_MS = 1200;
 const ROBOFLOW_CROP_SIZE = 224;
 const ROBOFLOW_MIN_CONFIDENCE = 0.38;
+const SIGN_HOLD_MS = 3000;
 const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || '';
 const UPLOADER_TAG_KEY = 'asl_uploader_tag';
 
@@ -889,7 +891,7 @@ function processTranslation(handList, handednessList = ["Right"]) {
   const localLabel = localPrediction?.label || '';
   const isCustomSign = localLabel !== 'NO SIGN' && !BASE_CLASSES.has(localLabel);
 
-  if (isCustomSign && localPrediction.confidence >= 0.65) {
+  if (isCustomSign && localPrediction.confidence >= 0.35) {
     prediction = localPrediction;
   } else if (backendPrediction) {
     const isAllowed = !allowedLabels || allowedLabels.has(backendPrediction.label);
@@ -979,13 +981,21 @@ function processTranslation(handList, handednessList = ["Right"]) {
     }
   }
 
+  const now = Date.now();
   if (prediction.label !== "NO SIGN" && prediction.confidence > 0.45) {
+    heldSign = { label: prediction.label, until: now + SIGN_HOLD_MS };
     predText.innerText = prediction.label;
     predText.classList.remove('empty');
     const confPercent = Math.round(prediction.confidence * 100);
     predConfidenceFill.style.width = `${confPercent}%`;
     predConfidenceText.innerText = `${confPercent}%`;
+  } else if (heldSign.label && now < heldSign.until) {
+    predText.innerText = heldSign.label;
+    predText.classList.remove('empty');
+    predConfidenceFill.style.width = '50%';
+    predConfidenceText.innerText = 'HOLD';
   } else {
+    heldSign = { label: null, until: 0 };
     predText.innerText = "NO SIGN";
     predText.classList.add('empty');
     predConfidenceFill.style.width = '0%';
@@ -1049,12 +1059,22 @@ function handleNoHand() {
   latestRoboflowPredictionAt = 0;
   backendPrediction = null;
   lastBackendCall = 0;
-  predText.innerText = "NO SIGN";
-  predText.classList.add('empty');
-  predConfidenceFill.style.width = '0%';
-  predConfidenceText.innerText = '0%';
-  if (debugCoords) debugCoords.innerText = '';
 
+  const now = Date.now();
+  if (heldSign.label && now < heldSign.until) {
+    predText.innerText = heldSign.label;
+    predText.classList.remove('empty');
+    predConfidenceFill.style.width = '50%';
+    predConfidenceText.innerText = 'HOLD';
+  } else {
+    heldSign = { label: null, until: 0 };
+    predText.innerText = "NO SIGN";
+    predText.classList.add('empty');
+    predConfidenceFill.style.width = '0%';
+    predConfidenceText.innerText = '0%';
+  }
+
+  if (debugCoords) debugCoords.innerText = '';
   predictionBuffer.push("NO SIGN");
   if (predictionBuffer.length > PREDICTION_BUFFER_SIZE) {
     predictionBuffer.shift();
@@ -1206,10 +1226,18 @@ function renderGestureList() {
   });
 
   document.querySelectorAll('.delete-gesture-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       const label = e.currentTarget.getAttribute('data-label');
       if (confirm(`Are you sure you want to delete the custom sign: "${label}"?`)) {
         classifier.deleteGesture(label);
+        try {
+          await axios.delete(`${BACKEND_BASE_URL}/api/training/samples`, {
+            data: { label },
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } catch (err) {
+          console.warn('Backend delete failed (sample may not exist on server):', err);
+        }
         renderGestureList();
         updateStats();
       }
