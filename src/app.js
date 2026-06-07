@@ -242,16 +242,14 @@ const getAlphabetArray = () => {
   return [];
 };
 const alphabet = getAlphabetArray();
-// Filter out any default samples labeled 'YES' to prevent KNN from returning that label
-const filteredAlphabet = Array.isArray(alphabet) ? alphabet.filter(s => String(s.label).toUpperCase() !== 'YES') : [];
 
 // Load pre-bundled alphabet if no custom gestures exist yet and user hasn't explicitly cleared them
-const CURRENT_DB_VERSION = "v3_user_trained";
+const CURRENT_DB_VERSION = "v4_augmented";
 const storedDbVersion = localStorage.getItem("asl_db_version");
 const isExplicitlyBlank = localStorage.getItem("asl_db_blank") === "true";
 
 if (!isExplicitlyBlank && (classifier.samples.length === 0 || storedDbVersion !== CURRENT_DB_VERSION)) {
-  classifier.samples = [...filteredAlphabet];
+  classifier.samples = Array.isArray(alphabet) ? [...alphabet] : [];
   classifier.saveToLocalStorage();
   localStorage.setItem("asl_db_version", CURRENT_DB_VERSION);
   localStorage.setItem("asl_db_blank", "false");
@@ -859,7 +857,6 @@ function processTranslation(handList, handednessList = ["Right"]) {
   const height = videoElement.videoHeight || 480;
   const aspectRatio = width / height;
   const isStrict = chkStrictMode ? chkStrictMode.checked : false;
-  const stabilityConfidenceGate = isStrict ? 0.72 : 0.58;
   // Only use Roboflow/web-hosted model when user selected Interpret Words mode
   if (interpretMode === 'words') {
     void requestRoboflowPrediction(handList);
@@ -981,12 +978,50 @@ function processTranslation(handList, handednessList = ["Right"]) {
     }
   }
 
+  // Push to buffer with lowered stability gate
+  const bufferedLabel = prediction.label !== "NO SIGN" && prediction.confidence >= 0.30
+    ? prediction.label
+    : "NO SIGN";
+
+  predictionBuffer.push(bufferedLabel);
+  if (predictionBuffer.length > PREDICTION_BUFFER_SIZE) {
+    predictionBuffer.shift();
+  }
+
+  // Find the dominant label in the buffer
+  const counts = {};
+  predictionBuffer.forEach(label => {
+    counts[label] = (counts[label] || 0) + 1;
+  });
+
+  let dominantLabel = "NO SIGN";
+  let maxCount = 0;
+  Object.keys(counts).forEach(label => {
+    if (counts[label] > maxCount) {
+      maxCount = counts[label];
+      dominantLabel = label;
+    }
+  });
+
   const now = Date.now();
-  if (prediction.label !== "NO SIGN" && prediction.confidence > 0.45) {
-    heldSign = { label: prediction.label, until: now + SIGN_HOLD_MS };
-    predText.innerText = prediction.label;
+  const stabilityRatio = maxCount / predictionBuffer.length;
+
+  // Display: use buffered dominant label when stable, fall back to raw prediction
+  let displayLabel = "NO SIGN";
+  let displayConfidence = 0;
+  if (dominantLabel !== "NO SIGN" && stabilityRatio >= 0.40) {
+    displayLabel = dominantLabel;
+    displayConfidence = Math.min(1.0, stabilityRatio);
+  } else if (prediction.label !== "NO SIGN" && prediction.confidence > 0.30) {
+    displayLabel = prediction.label;
+    displayConfidence = prediction.confidence;
+  }
+
+  if (displayLabel !== "NO SIGN") {
+    heldSign = { label: displayLabel, until: now + SIGN_HOLD_MS };
+    predText.innerText = displayLabel;
     predText.classList.remove('empty');
-    const confPercent = Math.round(prediction.confidence * 100);
+    const confPercent = Math.round(displayConfidence * 100);
     predConfidenceFill.style.width = `${confPercent}%`;
     predConfidenceText.innerText = `${confPercent}%`;
   } else if (heldSign.label && now < heldSign.until) {
@@ -1003,42 +1038,16 @@ function processTranslation(handList, handednessList = ["Right"]) {
   }
   console.debug('processTranslation: displayed=', predText.innerText, 'confidence=', predConfidenceText.innerText);
 
-  // Smooth prediction
-  const bufferedLabel = prediction.label !== "NO SIGN" && prediction.confidence >= stabilityConfidenceGate
-    ? prediction.label
-    : "NO SIGN";
-
-  predictionBuffer.push(bufferedLabel);
-  if (predictionBuffer.length > PREDICTION_BUFFER_SIZE) {
-    predictionBuffer.shift();
-  }
-
-  const counts = {};
-  predictionBuffer.forEach(label => {
-    counts[label] = (counts[label] || 0) + 1;
-  });
-
-  let dominantLabel = "NO SIGN";
-  let maxCount = 0;
-  Object.keys(counts).forEach(label => {
-    if (counts[label] > maxCount) {
-      maxCount = counts[label];
-      dominantLabel = label;
-    }
-  });
-
-  const stabilityRatio = maxCount / predictionBuffer.length;
-  if (dominantLabel !== "NO SIGN" && stabilityRatio >= 0.75) {
+  // Sentence building: use dominant label when highly stable
+  if (dominantLabel !== "NO SIGN" && stabilityRatio >= 0.65) {
     if (dominantLabel === lastStabilizedWord) {
       stableCount++;
       if (stableCount === STABILITY_LOCK_THRESHOLD) {
-          // Respect user's interpret mode: in 'letters' mode, do not accumulate multi-letter words
           const isMultiLetter = typeof dominantLabel === 'string' && dominantLabel.trim().length > 1;
           if (!(interpretMode === 'letters' && isMultiLetter)) {
             appendWordToSentence(dominantLabel);
             playBeep(650, 0.05, 'triangle');
           } else {
-            // Provide subtle feedback that a word was detected but not accumulated in Letters mode
             playBeep(220, 0.06, 'sine');
           }
       }

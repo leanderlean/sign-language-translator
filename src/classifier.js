@@ -202,7 +202,7 @@ export class ASLClassifier {
     const nearest = distances.slice(0, Math.min(k, distances.length));
 
     // Threshold check (stricter limit if Strict Mode is checked)
-    const threshold = isStrict ? 0.70 : 0.90;
+    const threshold = isStrict ? 1.00 : 1.30;
     const isBelowThreshold = nearest[0].distance <= threshold;
 
     // Use distance-weighted voting so a single close match matters more than
@@ -224,10 +224,10 @@ export class ASLClassifier {
     const marginShare = bestWeight > 0 ? Math.max(0, (bestWeight - runnerUpWeight) / bestWeight) : 0;
     const nearestDistanceScore = Math.max(0, 1 - (nearest[0].distance / threshold));
 
-    let confidence = (weightShare * 0.55) + (marginShare * 0.30) + (nearestDistanceScore * 0.15);
-    confidence = Math.min(1.0, Math.max(0.1, confidence));
+    let confidence = (weightShare * 0.50) + (marginShare * 0.25) + (nearestDistanceScore * 0.25);
+    confidence = Math.min(1.0, Math.max(0.10, confidence));
 
-    const isConfidentMatch = isBelowThreshold && weightShare >= 0.42 && marginShare >= 0.10;
+    const isConfidentMatch = isBelowThreshold && weightShare >= 0.25 && marginShare >= 0.05;
 
     const outLabel = isConfidentMatch ? remapLabel(bestLabel) : "NO SIGN";
     return {
