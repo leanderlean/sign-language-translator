@@ -1,12 +1,6 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "functions": {
-    "api/ml-predict.py": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  },
   "rewrites": [
     { "source": "/api/training/sample", "destination": "/api/training-sample" },
     { "source": "/api/training/samples", "destination": "/api/training-samples" },

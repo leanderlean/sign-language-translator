@@ -27,7 +27,8 @@ Backend/.env
 *.sln
 *.sw?
 
-# ML data archives (too large for git, download separately)
+# ML model pickle (large binary, use generated model.json instead)
+ml/*.pkl
 ml/data/*.zip
 
 # OS Files
