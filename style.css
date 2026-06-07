@@ -681,6 +681,41 @@ body {
   background: rgba(0, 240, 255, 0.1);
 }
 
+.backend-sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+.backend-sync-status.success {
+  border-color: rgba(21, 191, 89, 0.45);
+  color: var(--accent-success);
+  background: rgba(21, 191, 89, 0.1);
+}
+
+.backend-sync-status.error {
+  border-color: rgba(240, 80, 120, 0.45);
+  color: var(--accent-danger);
+  background: rgba(240, 80, 120, 0.1);
+}
+
+.backend-sync-status.syncing {
+  border-color: rgba(0, 240, 255, 0.45);
+  color: var(--accent-cyan);
+  background: rgba(0, 240, 255, 0.1);
+}
+
 /* Dataset Management UI */
 .dataset-card {
   padding: 24px;

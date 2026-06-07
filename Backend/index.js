@@ -5,6 +5,7 @@ import helmet from 'helmet'
 import morgan from 'morgan'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { spawn } from 'child_process'
 import { fetch as undiciFetch } from 'undici'
 
 // ensure `fetch` is available (some Node deployments use older runtimes)
@@ -99,6 +100,13 @@ async function ensureGesture(label, numHands = 1) {
     })
 
     return Array.isArray(created) ? created[0] : created
+}
+
+async function listAllSamples() {
+    return supabaseRequest(
+        '/samples?select=id,gesture_id,num_hands,handedness,landmarks,features,image_path,source,quality,created_at,gestures(name)&order=created_at.asc',
+        { method: 'GET' }
+    )
 }
 
 async function listApprovedSamples(gestureName = null) {
@@ -234,6 +242,32 @@ app.get('/api/training/export', handleExportApprovedSamples)
 
 app.get('/api/training/export/approved', handleExportApprovedSamples)
 
+app.get('/api/training/samples', async (req, res) => {
+    try {
+        if (!requireSupabaseConfig(res)) return
+        const samples = await listAllSamples()
+        const normalized = Array.isArray(samples)
+            ? samples.map(s => ({
+                id: s.id,
+                gesture_id: s.gesture_id,
+                gesture_name: s.gestures?.name || null,
+                num_hands: s.num_hands,
+                handedness: s.handedness,
+                landmarks: s.landmarks,
+                features: s.features,
+                image_path: s.image_path,
+                source: s.source,
+                quality: s.quality,
+                created_at: s.created_at
+            }))
+            : []
+        res.json({ ok: true, count: normalized.length, samples: normalized })
+    } catch (error) {
+        console.error('Failed to fetch samples:', error)
+        res.status(error.status || 500).json({ error: 'Failed to fetch samples', message: error.message })
+    }
+})
+
 app.get("/", (req, res) => {
     res.send("Hello from the backend")
 })
@@ -246,6 +280,34 @@ if (process.env.NODE_ENV === 'production') {
     app.use(express.static(distPath));
     app.get(/.*/, (req, res) => res.sendFile(path.join(distPath, 'index.html')));
 }
+
+// ML inference endpoint — calls Python predict script
+app.post('/api/ml/predict', (req, res) => {
+    const { landmarks } = req.body || {}
+    if (!Array.isArray(landmarks) || landmarks.length === 0) {
+        return res.status(400).json({ error: 'landmarks array is required' })
+    }
+
+    const py = spawn('python', [
+        'ml/predict.py'
+    ], { cwd: path.join(__dirname, '..') })
+
+    let stdout = '', stderr = ''
+    py.stdout.on('data', d => stdout += d)
+    py.stderr.on('data', d => stderr += d)
+    py.on('close', code => {
+        if (code !== 0) {
+            return res.status(500).json({ error: 'ML prediction failed', details: stderr })
+        }
+        try {
+            const result = JSON.parse(stdout)
+            res.json({ ok: true, predictions: result })
+        } catch {
+            res.status(500).json({ error: 'Invalid response from model', raw: stdout })
+        }
+    })
+    py.stdin.end(JSON.stringify({ landmarks }))
+})
 
 // Error handler
 app.use((err, req, res, next) => {

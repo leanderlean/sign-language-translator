@@ -1,6 +1,6 @@
 [
   {
-    "label": "E",
+    "label": "A",
     "numHands": 1,
     "features": [
       0,
@@ -1449,7 +1449,7 @@
     ]
   },
   {
-    "label": "A",
+    "label": "E",
     "numHands": 1,
     "features": [
       0,

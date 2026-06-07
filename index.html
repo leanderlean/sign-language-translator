@@ -238,6 +238,10 @@
             <div class="card-header-actions">
               <h3>Trained Gestures</h3>
               <div class="dataset-io-actions">
+                <button id="btn-sync-backend" class="btn btn-tertiary btn-icon btn-small">
+                  <span class="material-icons-round">cloud_sync</span>
+                  <span>Sync Backend</span>
+                </button>
                 <button id="btn-export-dataset" class="btn btn-tertiary btn-icon btn-small">
                   <span class="material-icons-round">download</span>
                   <span>Export</span>
@@ -249,6 +253,8 @@
                 <input type="file" id="import-dataset-file" accept=".json" style="display: none;">
               </div>
             </div>
+            
+            <div id="backend-sync-status" class="backend-sync-status">Backend sync: idle</div>
 
             <!-- List of trained gestures -->
             <div class="gesture-list-wrapper">

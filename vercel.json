@@ -1,0 +1,18 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/ml-predict.py": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/training/sample", "destination": "/api/training-sample" },
+    { "source": "/api/training/samples", "destination": "/api/training-samples" },
+    { "source": "/api/training/export(.*)", "destination": "/api/training-export" },
+    { "source": "/api/ml/predict", "destination": "/api/ml-predict" },
+    { "source": "/api/health", "destination": "/api/health" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

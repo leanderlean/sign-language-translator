@@ -27,6 +27,9 @@ Backend/.env
 *.sln
 *.sw?
 
+# ML data archives (too large for git, download separately)
+ml/data/*.zip
+
 # OS Files
 .DS_Store
 Thumbs.db

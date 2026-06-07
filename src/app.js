@@ -65,6 +65,8 @@ const btnImportDatasetTrigger = document.getElementById('btn-import-dataset-trig
 const importDatasetFile = document.getElementById('import-dataset-file');
 const btnClearDataset = document.getElementById('btn-clear-dataset');
 const trainingSaveStatus = document.getElementById('training-save-status');
+const btnSyncBackend = document.getElementById('btn-sync-backend');
+const backendSyncStatus = document.getElementById('backend-sync-status');
 
 // App State
 let activeTab = 'translate';
@@ -90,6 +92,11 @@ let lastStabilizedWord = '';
 let stableCount = 0;
 const STABILITY_LOCK_THRESHOLD = 10;
 
+// Backend ML model integration
+let backendPrediction = null;
+let lastBackendCall = 0;
+const BACKEND_THROTTLE_MS = 200;
+
 // Recording
 let isCapturing = false;
 let capturedSamplesCount = 0;
@@ -105,8 +112,14 @@ const ROBOFLOW_REQUEST_INTERVAL_MS = 850;
 const ROBOFLOW_RESULT_TTL_MS = 1200;
 const ROBOFLOW_CROP_SIZE = 224;
 const ROBOFLOW_MIN_CONFIDENCE = 0.38;
-const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL || '';
 const UPLOADER_TAG_KEY = 'asl_uploader_tag';
+
+// Classes the backend ML model was trained on — anything else is a custom sign
+const BASE_CLASSES = new Set([
+  'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
+  'DEL','SPACE','HELLO','I LOVE YOU','NO','YES','BYE','GOOD','PLEASE','SORRY'
+]);
 
 let roboflowInFlight = false;
 let lastRoboflowRequestAt = 0;
@@ -140,7 +153,7 @@ async function saveTrainingSampleToBackend(label, handList, handednessList, aspe
     imagePath,
     source: 'webcam',
     quality: 100,
-    approved: false,
+    approved: true,
     uploaderTag: getUploaderTag(),
     sessionId: null
   };
@@ -161,8 +174,60 @@ async function saveTrainingSampleToBackend(label, handList, handednessList, aspe
     trainingSaveStatus.textContent = `Supabase save status: saved ${String(label || '').toUpperCase()}`;
   }
 
+  setTimeout(() => void syncBackendSamples(), 500);
+
   return response.data;
 }
+
+async function syncBackendSamples() {
+  if (!backendSyncStatus) return;
+
+  backendSyncStatus.classList.remove('success', 'error');
+  backendSyncStatus.classList.add('syncing');
+  backendSyncStatus.textContent = 'Backend sync: syncing...';
+
+  try {
+    const response = await axios.get(`${BACKEND_BASE_URL}/api/training/samples`, {
+      headers: { 'Accept': 'application/json' }
+    });
+
+    const samples = Array.isArray(response.data?.samples)
+      ? response.data.samples
+      : (Array.isArray(response.data) ? response.data : []);
+
+    if (samples.length === 0) {
+      backendSyncStatus.classList.remove('syncing', 'error');
+      backendSyncStatus.classList.add('success');
+      backendSyncStatus.textContent = 'Backend sync: no samples found';
+      return;
+    }
+
+    const addedCount = classifier.loadBackendSamples(samples);
+
+    backendSyncStatus.classList.remove('syncing', 'error');
+    backendSyncStatus.classList.add('success');
+    backendSyncStatus.textContent = `Backend sync: synced ${samples.length} sample(s) (${addedCount} new)`;
+
+    // Update UI elements
+    updateStats();
+    renderGestureList();
+  } catch (error) {
+    console.error('Backend sync failed:', error);
+    backendSyncStatus.classList.remove('syncing', 'success');
+    backendSyncStatus.classList.add('error');
+    backendSyncStatus.textContent = 'Backend sync: failed';
+  }
+}
+
+let periodicSyncInterval = null;
+
+function startPeriodicSync() {
+  if (periodicSyncInterval) clearInterval(periodicSyncInterval);
+  periodicSyncInterval = setInterval(() => {
+    void syncBackendSamples();
+  }, 30000);
+}
+
 
 // Motion history buffer specifically for dynamic letters J and Z
 let motionHistory = [];
@@ -464,6 +529,8 @@ async function initApp() {
   updateStats();
   renderGestureList();
   setupEventListeners();
+  void syncBackendSamples();
+  startPeriodicSync();
 }
 
 function onFaceResults(results) {
@@ -805,8 +872,48 @@ function processTranslation(handList, handednessList = ["Right"]) {
   }
 
   const localPrediction = classifier.classify(handList, handednessList, 5, aspectRatio, isStrict, allowedLabels);
+
+  // Throttled async backend ML call
+  if (handList && handList.length > 0) {
+    const now = Date.now();
+    if (now - lastBackendCall > BACKEND_THROTTLE_MS) {
+      lastBackendCall = now;
+      classifier.classifyRemote(handList).then(result => {
+        if (result) backendPrediction = result;
+      });
+    }
+  }
+
+  // Priority: Custom sign (KNN) > Backend ML > local KNN
+  let prediction;
+  const localLabel = localPrediction?.label || '';
+  const isCustomSign = localLabel !== 'NO SIGN' && !BASE_CLASSES.has(localLabel);
+
+  if (isCustomSign && localPrediction.confidence >= 0.65) {
+    prediction = localPrediction;
+  } else if (backendPrediction) {
+    const isAllowed = !allowedLabels || allowedLabels.has(backendPrediction.label);
+    if (isAllowed) {
+      prediction = {
+        label: backendPrediction.label,
+        confidence: backendPrediction.confidence,
+        nearestLabel: backendPrediction.label,
+        nearestDistance: 0,
+        testFeature: [],
+        nearest3D: [backendPrediction.label],
+        nearest2D: [backendPrediction.label]
+      };
+    } else {
+      prediction = localPrediction;
+    }
+  } else {
+    prediction = localPrediction;
+  }
+
   const roboflowPrediction = (interpretMode === 'words') ? getFreshRoboflowPrediction() : null;
-  let prediction = roboflowPrediction || localPrediction;
+  if (roboflowPrediction) {
+    prediction = roboflowPrediction;
+  }
 
   if (
     roboflowPrediction &&
@@ -823,7 +930,7 @@ function processTranslation(handList, handednessList = ["Right"]) {
     prediction = { label: 'NO SIGN', confidence: 0 };
   }
 
-  console.debug('processTranslation: local=', localPrediction, 'roboflow=', roboflowPrediction, 'chosen=', prediction);
+  console.debug('processTranslation: backend=', backendPrediction, 'local=', localPrediction, 'roboflow=', roboflowPrediction, 'chosen=', prediction);
   
   // Check if we are currently locked in a motion prediction
   if (motionLockFrames > 0) {
@@ -940,6 +1047,8 @@ function handleNoHand() {
   motionLockLabel = '';
   latestRoboflowPrediction = null;
   latestRoboflowPredictionAt = 0;
+  backendPrediction = null;
+  lastBackendCall = 0;
   predText.innerText = "NO SIGN";
   predText.classList.add('empty');
   predConfidenceFill.style.width = '0%';
@@ -1269,6 +1378,12 @@ function setupEventListeners() {
       stopCapturing();
     }
   });
+
+  if (btnSyncBackend) {
+    btnSyncBackend.addEventListener('click', () => {
+      void syncBackendSamples();
+    });
+  }
 
   btnExportDataset.addEventListener('click', () => {
     const exportFromBackend = async () => {

@@ -144,13 +144,7 @@ export class ASLClassifier {
     const rotationAngle = Math.atan2(dxMcp, -dyMcp);
     const rawYDiff = mcp.y - wrist.y;
 
-    // Helper to swap A <-> E across all outputs when requested by UI
-    const remapLabel = (lab) => {
-      if (!lab) return lab;
-      if (lab === 'A') return 'E';
-      if (lab === 'E') return 'A';
-      return lab;
-    };
+    const remapLabel = (lab) => lab;
 
     // 1. Try Rule-Based classification first for core fingerspelling letters (unless Strict Mode is enabled)
     const ruleLabel = isStrict ? null : this.classifyRuleBased(testFeature, rotationAngle, rawYDiff, landmarks, aspectRatio);
@@ -245,6 +239,33 @@ export class ASLClassifier {
       nearest3D: nearest.slice(0, 3).map(n => `${remapLabel(n.label)} (${n.distance.toFixed(2)})`),
       nearest2D: distances2D.slice(0, 3).map(n => `${remapLabel(n.label)} (${n.distance.toFixed(2)})`)
     };
+  }
+
+  async classifyRemote(handList) {
+    if (!handList || handList.length === 0) return null;
+    const hand = handList[0];
+    const landmarks = [];
+    for (let i = 0; i < 21; i++) {
+      landmarks.push(hand[i].x, hand[i].y, hand[i].z);
+    }
+    try {
+      const url = window.location.origin.includes('localhost')
+        ? 'http://localhost:3000/api/ml/predict'
+        : '/api/ml/predict';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ landmarks })
+      });
+      const data = await res.json();
+      if (data.ok && data.predictions && data.predictions.length > 0) {
+        return {
+          label: data.predictions[0].label,
+          confidence: data.predictions[0].confidence
+        };
+      }
+    } catch {}
+    return null;
   }
 
   /**
@@ -532,4 +553,45 @@ export class ASLClassifier {
       return false;
     }
   }
+
+  /**
+   * Merge gesture samples fetched from the backend.
+   * Ensures no duplicates are added by comparing feature arrays.
+   * @param {Array} backendSamples - Array of sample objects from backend API
+   * @returns {Number} Number of newly imported samples
+   */
+  loadBackendSamples(backendSamples) {
+    if (!Array.isArray(backendSamples)) return 0;
+
+    let addedCount = 0;
+    backendSamples.forEach(sample => {
+      const label = (sample.gesture_name || sample.label || '').toUpperCase().trim();
+      const features = sample.features;
+      const numHands = sample.num_hands || sample.numHands || 1;
+
+      if (!label || !Array.isArray(features)) return;
+
+      // Check for duplicates
+      const isDup = this.samples.some(existing => {
+        if (existing.label !== label) return false;
+        if (existing.features.length !== features.length) return false;
+        return existing.features.every((v, i) => Math.abs(v - features[i]) < 1e-5);
+      });
+
+      if (!isDup) {
+        this.samples.push({
+          label,
+          numHands,
+          features
+        });
+        addedCount++;
+      }
+    });
+
+    if (addedCount > 0) {
+      this.saveToLocalStorage();
+    }
+    return addedCount;
+  }
 }
+
