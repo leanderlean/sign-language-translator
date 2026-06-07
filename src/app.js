@@ -89,7 +89,9 @@ let latencyHistory = [];
 const PREDICTION_BUFFER_SIZE = 12;
 let predictionBuffer = [];
 let lastStabilizedWord = '';
+let lastAppendedWord = '';
 let stableCount = 0;
+let noHandSince = null;
 const STABILITY_LOCK_THRESHOLD = 10;
 
 // Backend ML model integration
@@ -862,12 +864,26 @@ function processTranslation(handList, handednessList = ["Right"]) {
     void requestRoboflowPrediction(handList);
   }
 
+  noHandSince = null;
+
   // Build allowed label set depending on interpret mode
   let allowedLabels = null;
   if (interpretMode === 'words') {
     allowedLabels = new Set((wordGestures || []).map(s => String(s).toUpperCase()));
+    classifier.samples.forEach(s => {
+      const label = String(s.label || '').toUpperCase();
+      if (!BASE_CLASSES.has(label)) {
+        allowedLabels.add(label);
+      }
+    });
   } else if (interpretMode === 'letters') {
     allowedLabels = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+    classifier.samples.forEach(s => {
+      const label = String(s.label || '').toUpperCase();
+      if (!BASE_CLASSES.has(label)) {
+        allowedLabels.add(label);
+      }
+    });
   }
 
   const localPrediction = classifier.classify(handList, handednessList, 5, aspectRatio, isStrict, allowedLabels);
@@ -1038,18 +1054,32 @@ function processTranslation(handList, handednessList = ["Right"]) {
   }
   console.debug('processTranslation: displayed=', predText.innerText, 'confidence=', predConfidenceText.innerText);
 
-  // Sentence building: use dominant label when highly stable
-  if (dominantLabel !== "NO SIGN" && stabilityRatio >= 0.65) {
+  // Sentence building:
+  //   High confidence (>= 0.70) → accumulate immediately (with dedup)
+  //   Lower confidence → use buffer stability approach
+  if (prediction.label !== "NO SIGN" && prediction.confidence >= 0.70) {
+    if (prediction.label !== lastAppendedWord) {
+      lastAppendedWord = prediction.label;
+      const isMultiLetter = typeof prediction.label === 'string' && prediction.label.trim().length > 1;
+      if (!(interpretMode === 'letters' && isMultiLetter)) {
+        appendWordToSentence(prediction.label);
+        playBeep(650, 0.05, 'triangle');
+      } else {
+        playBeep(220, 0.06, 'sine');
+      }
+    }
+  } else if (dominantLabel !== "NO SIGN" && stabilityRatio >= 0.65) {
     if (dominantLabel === lastStabilizedWord) {
       stableCount++;
-      if (stableCount === STABILITY_LOCK_THRESHOLD) {
-          const isMultiLetter = typeof dominantLabel === 'string' && dominantLabel.trim().length > 1;
-          if (!(interpretMode === 'letters' && isMultiLetter)) {
-            appendWordToSentence(dominantLabel);
-            playBeep(650, 0.05, 'triangle');
-          } else {
-            playBeep(220, 0.06, 'sine');
-          }
+      if (stableCount === STABILITY_LOCK_THRESHOLD && dominantLabel !== lastAppendedWord) {
+        lastAppendedWord = dominantLabel;
+        const isMultiLetter = typeof dominantLabel === 'string' && dominantLabel.trim().length > 1;
+        if (!(interpretMode === 'letters' && isMultiLetter)) {
+          appendWordToSentence(dominantLabel);
+          playBeep(650, 0.05, 'triangle');
+        } else {
+          playBeep(220, 0.06, 'sine');
+        }
       }
     } else {
       lastStabilizedWord = dominantLabel;
@@ -1089,38 +1119,24 @@ function handleNoHand() {
     predictionBuffer.shift();
   }
 
-  const noHandCount = predictionBuffer.filter(p => p === "NO SIGN").length;
-  if (noHandCount > PREDICTION_BUFFER_SIZE / 2) {
+  if (noHandSince === null) {
+    noHandSince = Date.now();
+  } else if (Date.now() - noHandSince >= 2500) {
     lastStabilizedWord = '';
+    lastAppendedWord = '';
     stableCount = 0;
   }
 }
 
 function appendWordToSentence(word) {
-  const filipinoMap = {
-    'HELLO': 'KUMUSTA',
-    'NO': 'HINDI',
-    'I LOVE YOU': 'MAHAL KITA',
-    'THANK YOU': 'SALAMAT',
-    'THANKS': 'SALAMAT',
-    'GOOD': 'MABUTI',
-    'PLEASE': 'PAWANG',
-    'BYE': 'PAALAM',
-    'HELLO (WAVE)': 'KUMUSTA'
-  };
-
-  const normalized = (word || '').toString().trim().toUpperCase();
-  const translated = (interpretMode === 'words' && normalized.length > 1 && filipinoMap[normalized]) ? filipinoMap[normalized] : word;
-
   const currentText = sentenceOutput.value.trim();
-  if ((translated || '').length === 1) {
-    sentenceOutput.value = currentText ? currentText + translated : translated;
+  if ((word || '').length === 1) {
+    sentenceOutput.value = currentText ? currentText + word : word;
   } else {
-    // Optionally append detected facial expression for context when in Words mode
     const emotionTag = (interpretMode === 'words' && currentFaceEmotion && currentFaceEmotion.label && currentFaceEmotion.label !== 'NEUTRAL' && currentFaceEmotion.label !== 'NO FACE')
       ? ` (${currentFaceEmotion.label})`
       : '';
-    sentenceOutput.value = currentText ? currentText + " " + translated + emotionTag : translated + emotionTag;
+    sentenceOutput.value = currentText ? currentText + " " + word + emotionTag : word + emotionTag;
   }
   sentenceOutput.scrollTop = sentenceOutput.scrollHeight;
 }
